@@ -1,0 +1,9 @@
+upwork:
+  browser_executable: "/usr/bin/google-chrome-stable"
+  graphql_url: "https://www.upwork.com/api/graphql/v1?alias=visitorJobSearch"
+  page_size: 50
+  output_file: "data/web_scraping_results/upwork_scraping_results.csv"
+  defaults:
+    query: "python"
+    count: 10
+    days: null
