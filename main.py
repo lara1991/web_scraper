@@ -26,16 +26,21 @@ def _parse_args(defaults: dict) -> argparse.Namespace:
         description="Search Upwork jobs and save results to CSV.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    default_queries = defaults.get("query", ["python"])
+    if isinstance(default_queries, str):
+        default_queries = [default_queries]
     parser.add_argument(
         "--query", "-q",
-        default=defaults.get("query", "python"),
-        help="Job search query",
+        nargs="+",
+        default=default_queries,
+        metavar="QUERY",
+        help="One or more search queries (space-separated)",
     )
     parser.add_argument(
         "--count", "-n",
         type=int,
         default=defaults.get("count", 10),
-        help="Maximum number of results to fetch",
+        help="Maximum number of results per query",
     )
     parser.add_argument(
         "--days", "-d",
@@ -51,20 +56,33 @@ async def run() -> None:
     upwork_cfg = config["upwork"]
     args = _parse_args(upwork_cfg.get("defaults", {}))
 
+    queries: list[str] = args.query
     date_note = f", last {args.days} day(s)" if args.days else ""
-    print(f"Fetching up to {args.count} Upwork jobs for: '{args.query}'{date_note}\n")
+    print(
+        f"Fetching up to {args.count} job(s) per query{date_note}\n"
+        f"Queries  : {', '.join(queries)}\n"
+    )
 
     scraper = UpworkScraper(upwork_cfg)
-    listings = await scraper.scrape(query=args.query, count=args.count, days=args.days)
+    listings_by_query = await scraper.scrape_many(
+        queries=queries, count=args.count, days=args.days
+    )
 
     output_path = Path(upwork_cfg["output_file"])
     storage = CsvStorage(output_path)
-    new_count = storage.save(listings)
 
-    print(f"\nFetched  : {len(listings)} job(s)")
-    print(f"New      : {new_count} saved")
-    print(f"Skipped  : {len(listings) - new_count} duplicate(s)")
-    print(f"Results  : {output_path}")
+    total_fetched = total_new = 0
+    for query, listings in listings_by_query.items():
+        new_count = storage.save(listings)
+        skipped = len(listings) - new_count
+        total_fetched += len(listings)
+        total_new += new_count
+        print(f"  [{query}]  fetched={len(listings)}  new={new_count}  skipped={skipped}")
+
+    print(f"\nTotal fetched : {total_fetched}")
+    print(f"Total new     : {total_new}")
+    print(f"Total skipped : {total_fetched - total_new}")
+    print(f"Results       : {output_path}")
 
 
 if __name__ == "__main__":

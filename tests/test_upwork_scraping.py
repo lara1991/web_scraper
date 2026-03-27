@@ -48,7 +48,7 @@ def _patch_session(instance: UpworkScraper, cookies: dict | None = None) -> None
 
 class TestToListing:
     def test_fixed_price_job(self):
-        raw = make_raw_job("id-1", "Django Dev", job_type="FIXED", amount=300.0)
+        raw = make_raw_job("id-1", title="Django Dev", job_type="FIXED", amount=300.0)
         listing = UpworkScraper._to_listing(raw)
 
         assert isinstance(listing, JobListing)
@@ -61,7 +61,7 @@ class TestToListing:
         assert listing.publish_time == NOW_ISO
 
     def test_hourly_job(self):
-        raw = make_raw_job("id-2", "FastAPI Dev", job_type="HOURLY",
+        raw = make_raw_job("id-2", title="FastAPI Dev", job_type="HOURLY",
                            hourly_min=25.0, hourly_max=50.0)
         listing = UpworkScraper._to_listing(raw)
 
@@ -297,3 +297,122 @@ class TestScrapeIntegration:
         listings = await s.scrape(query="python", count=10, days=None)
         ids = [l.job_id for l in listings]
         assert len(ids) == len(set(ids))
+
+
+# ---------------------------------------------------------------------------
+# scrape_many() – multi-query, single browser session
+# ---------------------------------------------------------------------------
+
+class TestScrapeMany:
+    def _query_aware_fetch(self, data: dict[str, list[dict]]):
+        """Return a _fetch_page stub keyed by query string."""
+        def fetch(cookies, ua, query, url, offset):
+            return data.get(query, []) if offset == 0 else []
+        return fetch
+
+    @pytest.mark.asyncio
+    async def test_returns_results_for_each_query(self):
+        s = scraper()
+        _patch_session(s)
+        s._fetch_page = self._query_aware_fetch({
+            "python": [make_raw_job("py-1"), make_raw_job("py-2")],
+            "django": [make_raw_job("dj-1")],
+        })
+        results = await s.scrape_many(queries=["python", "django"], count=10, days=None)
+        assert set(results.keys()) == {"python", "django"}
+        assert len(results["python"]) == 2
+        assert len(results["django"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_all_values_are_job_listings(self):
+        s = scraper()
+        _patch_session(s)
+        s._fetch_page = lambda cookies, ua, query, url, offset: [make_raw_job("x")] if offset == 0 else []
+        results = await s.scrape_many(queries=["python"], count=5, days=None)
+        assert all(isinstance(l, JobListing) for l in results["python"])
+
+    @pytest.mark.asyncio
+    async def test_opens_browser_exactly_once(self):
+        s = scraper()
+        session_calls = [0]
+
+        async def counting_session(url):
+            session_calls[0] += 1
+            return ({"UniversalSearchNuxt_vt": "token"}, "ua")
+
+        s._get_session = counting_session
+        s._fetch_page = lambda *a, **k: []
+        await s.scrape_many(queries=["python", "django", "fastapi"], count=5, days=None)
+        assert session_calls[0] == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_queries_returns_empty_dict(self):
+        s = scraper()
+        _patch_session(s)
+        results = await s.scrape_many(queries=[], count=10, days=None)
+        assert results == {}
+
+    @pytest.mark.asyncio
+    async def test_respects_count_per_query(self):
+        s = scraper()
+        _patch_session(s)
+        # Return 20 jobs for every query
+        s._fetch_page = lambda cookies, ua, query, url, offset: (
+            [make_raw_job(f"{query}-{i}") for i in range(20)] if offset == 0 else []
+        )
+        results = await s.scrape_many(queries=["python", "django"], count=5, days=None)
+        assert len(results["python"]) == 5
+        assert len(results["django"]) == 5
+
+    @pytest.mark.asyncio
+    async def test_applies_date_filter_to_all_queries(self):
+        now = datetime.now(tz=timezone.utc)
+        new_time = (now - timedelta(hours=1)).isoformat()
+        old_time = (now - timedelta(days=10)).isoformat()
+
+        s = scraper()
+        _patch_session(s)
+        s._fetch_page = self._query_aware_fetch({
+            "python": [make_raw_job("py-new", publish_time=new_time), make_raw_job("py-old", publish_time=old_time)],
+            "rust":   [make_raw_job("rs-new", publish_time=new_time), make_raw_job("rs-old", publish_time=old_time)],
+        })
+        results = await s.scrape_many(queries=["python", "rust"], count=10, days=2)
+        assert [l.job_id for l in results["python"]] == ["py-new"]
+        assert [l.job_id for l in results["rust"]] == ["rs-new"]
+
+    @pytest.mark.asyncio
+    async def test_preserves_query_order(self):
+        queries = ["fastapi", "python", "django"]
+        s = scraper()
+        _patch_session(s)
+        s._fetch_page = lambda *a, **k: []
+        results = await s.scrape_many(queries=queries, count=5, days=None)
+        assert list(results.keys()) == queries
+
+    @pytest.mark.asyncio
+    async def test_source_field_is_upwork_for_all(self):
+        s = scraper()
+        _patch_session(s)
+        s._fetch_page = self._query_aware_fetch({
+            "python": [make_raw_job("py-1")],
+            "django": [make_raw_job("dj-1")],
+        })
+        results = await s.scrape_many(queries=["python", "django"], count=5, days=None)
+        for listings in results.values():
+            assert all(l.source == "upwork" for l in listings)
+
+    @pytest.mark.asyncio
+    async def test_single_query_behaves_same_as_scrape(self):
+        """scrape_many with one query should return same listings as scrape()."""
+        raw = [make_raw_job("solo-1"), make_raw_job("solo-2")]
+        s1 = scraper()
+        _patch_session(s1)
+        _patch_fetch(s1, [raw])
+        single = await s1.scrape(query="python", count=5, days=None)
+
+        s2 = scraper()
+        _patch_session(s2)
+        s2._fetch_page = lambda cookies, ua, query, url, offset: raw if offset == 0 else []
+        many = await s2.scrape_many(queries=["python"], count=5, days=None)
+
+        assert [l.job_id for l in single] == [l.job_id for l in many["python"]]

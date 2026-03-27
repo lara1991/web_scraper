@@ -41,6 +41,7 @@ def make_listing(
 
 def make_raw_job(
     job_id: str = "raw-001",
+    *,
     title: str = "Django Dev",
     job_type: str = "FIXED",
     amount: float = 200.0,

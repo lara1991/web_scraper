@@ -66,6 +66,39 @@ class UpworkScraper(BaseScraper):
         raw_jobs = self._collect_raw(cookies, user_agent, query, search_url, count, days)
         return [self._to_listing(job) for job in raw_jobs]
 
+    async def scrape_many(
+        self, queries: list[str], count: int, days: int | None
+    ) -> dict[str, list[JobListing]]:
+        """Scrape multiple queries concurrently, reusing a single browser session.
+
+        Opens Chrome exactly once to obtain session cookies, then fires all
+        query fetches in parallel threads (curl_cffi is synchronous, so each
+        query runs via ``asyncio.to_thread``).
+
+        Args:
+            queries: List of search terms.
+            count:   Maximum results per query.
+            days:    Date-range filter applied to every query.
+
+        Returns:
+            Mapping of ``{query: [JobListing, ...]}``, preserving input order.
+        """
+        if not queries:
+            return {}
+
+        first_url = f"https://www.upwork.com/nx/search/jobs/?q={queries[0]}&sort=recency"
+        cookies, user_agent = await self._get_session(first_url)
+
+        async def _fetch_query(query: str) -> list[JobListing]:
+            search_url = f"https://www.upwork.com/nx/search/jobs/?q={query}&sort=recency"
+            raw_jobs = await asyncio.to_thread(
+                self._collect_raw, cookies, user_agent, query, search_url, count, days
+            )
+            return [self._to_listing(job) for job in raw_jobs]
+
+        results = await asyncio.gather(*[_fetch_query(q) for q in queries])
+        return dict(zip(queries, results))
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

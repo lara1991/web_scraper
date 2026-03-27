@@ -4,6 +4,7 @@ upwork:
   page_size: 50
   output_file: "data/web_scraping_results/upwork_scraping_results.csv"
   defaults:
-    query: "python"
+    query:
+      - "python"
     count: 10
     days: null
