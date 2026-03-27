@@ -5,6 +5,8 @@ upwork:
   output_file: "data/web_scraping_results/upwork_scraping_results.csv"
   defaults:
     query:
-      - "python"
-    count: 10
+      - "generative ai"
+      - "RAG Systems"
+      - "Computer Vision"
+    count: 100
     days: null
