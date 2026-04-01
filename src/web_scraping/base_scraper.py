@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from web_scraping.models import JobListing
-
 
 class BaseScraper(ABC):
     """Abstract base class for all job-board scrapers."""
@@ -11,7 +9,7 @@ class BaseScraper(ABC):
         self._config = config
 
     @abstractmethod
-    async def scrape(self, query: str, count: int, days: int | None) -> list[JobListing]:
+    async def scrape(self, query: str, count: int, days: int | None) -> list[Any]:
         """Scrape jobs matching *query*.
 
         Args:
@@ -21,5 +19,15 @@ class BaseScraper(ABC):
                    ``None`` means no date restriction.
 
         Returns:
-            A list of :class:`JobListing` objects, newest first, without duplicates.
+            A list of job listing dataclass objects, newest first, without duplicates.
+        """
+
+    @abstractmethod
+    async def scrape_many(
+        self, queries: list[str], count: int, days: int | None
+    ) -> dict[str, list[Any]]:
+        """Scrape *queries* in sequence/parallel.
+
+        Returns:
+            Mapping of ``{query: [listing, ...]}``, preserving input order.
         """

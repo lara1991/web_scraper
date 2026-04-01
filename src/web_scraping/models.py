@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 @dataclass
 class JobListing:
-    """Represents a single scraped job listing, common across all sources."""
+    """Represents a single scraped Upwork job listing."""
 
     # ---- core job fields ----
     job_id: str
@@ -27,6 +27,29 @@ class JobListing:
     client_total_spent: str        # e.g. "$5,000+" or ""
     client_total_reviews: str      # number of reviews or ""
     client_total_feedback: str     # average star rating, e.g. "4.90" or ""
+
+    scraped_at: str = field(
+        default_factory=lambda: datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+    )
+
+
+@dataclass
+class LinkedInJobListing:
+    """Represents a single scraped LinkedIn job listing."""
+
+    job_id: str
+    source: str
+    title: str
+    company: str             # hiring company name
+    location: str            # city / state / country
+    workplace_type: str      # Remote / Hybrid / On-site
+    employment_type: str     # Full-time / Part-time / Contract / Temporary / etc.
+    experience_level: str    # Entry level / Mid-Senior level / Director / etc.
+    description: str
+    skills: str              # job function or extracted keywords
+    publish_time: str        # ISO date string e.g. "2026-03-30"
+    url: str
+    applicant_count: str     # e.g. "Over 200 applicants" or ""
 
     scraped_at: str = field(
         default_factory=lambda: datetime.now(tz=timezone.utc).isoformat(timespec="seconds")

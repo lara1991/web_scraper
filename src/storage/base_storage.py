@@ -1,13 +1,12 @@
 from abc import ABC, abstractmethod
-
-from web_scraping.models import JobListing
+from typing import Any
 
 
 class BaseStorage(ABC):
     """Abstract base class for persisting job listings."""
 
     @abstractmethod
-    def save(self, listings: list[JobListing]) -> int:
+    def save(self, listings: list[Any]) -> int:
         """Persist *listings*, skipping duplicates.
 
         Returns:

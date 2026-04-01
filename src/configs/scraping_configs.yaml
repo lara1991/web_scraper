@@ -10,3 +10,26 @@ upwork:
       - "Computer Vision"
     count: 100
     days: null
+
+linkedin:
+  # Delay (seconds) between paginated search requests — increase if you hit 429.
+  request_delay: 1.5
+  # Delay (seconds) between individual job-detail fetches.
+  detail_delay: 0.7
+  # Set to false to skip per-job detail requests (faster, but no description/seniority).
+  fetch_details: true
+  output_file: "data/web_scraping_results/linkedin_scraping_results.csv"
+  # Optional static filters applied to every search.
+  # Remove or leave blank to disable a filter.
+  filters:
+    location: "United States"
+    # experience_levels: ["2", "4"]   # "2"=Entry, "4"=Mid-Senior  (see filters.py)
+    # employment_types:  ["F", "C"]   # "F"=Full-time, "C"=Contract
+    # workplace_types:   ["2", "3"]   # "2"=Remote, "3"=Hybrid
+    # time_filter: ""                 # override --days; e.g. "r604800" for 1 week
+  defaults:
+    query:
+      - "python developer"
+      - "machine learning engineer"
+    count: 25
+    days: 7
