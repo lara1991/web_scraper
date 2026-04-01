@@ -1,4 +1,4 @@
-"""Tests for web_scraping.upwork_scraping.UpworkScraper.
+"""Tests for web_scraping.upwork.scraper.UpworkScraper.
 
 All tests are fully offline: _fetch_graphql_page is monkeypatched to avoid
 any network calls, and _get_session is patched to avoid opening a browser.
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from web_scraping.upwork_scraping import UpworkScraper
+from web_scraping.upwork.scraper import UpworkScraper
 from web_scraping.models import JobListing
 from tests.conftest import make_raw_job, make_ssr_job, UPWORK_CONFIG, NOW_ISO
 
