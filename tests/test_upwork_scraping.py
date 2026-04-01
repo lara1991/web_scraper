@@ -1,17 +1,17 @@
 """Tests for web_scraping.upwork_scraping.UpworkScraper.
 
-All tests are fully offline: _fetch_page is monkeypatched to avoid any
-network calls, and _get_session is patched to avoid opening a browser.
+All tests are fully offline: _fetch_graphql_page is monkeypatched to avoid
+any network calls, and _get_session is patched to avoid opening a browser.
 """
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from web_scraping.upwork_scraping import UpworkScraper
 from web_scraping.models import JobListing
-from tests.conftest import make_raw_job, UPWORK_CONFIG, NOW_ISO
+from tests.conftest import make_raw_job, make_ssr_job, UPWORK_CONFIG, NOW_ISO
 
 PAGE_SIZE = UPWORK_CONFIG["page_size"]  # 50
 
@@ -24,29 +24,32 @@ def scraper() -> UpworkScraper:
     return UpworkScraper(UPWORK_CONFIG)
 
 
-def _patch_fetch(instance: UpworkScraper, pages: list[list[dict]]) -> None:
-    """
-    Replace ``_fetch_page`` with a callable that returns ``pages[offset // PAGE_SIZE]``
-    (or an empty list when the index is out of range).
-    """
+def _patch_graphql_page(instance: UpworkScraper, pages: list[list[dict]]) -> None:
+    """Replace ``_fetch_graphql_page`` with pages[offset // PAGE_SIZE] (or [])."""
     def fake_fetch(cookies, user_agent, query, search_url, offset):
         idx = offset // PAGE_SIZE
         return pages[idx] if idx < len(pages) else []
 
-    instance._fetch_page = fake_fetch
+    instance._fetch_graphql_page = fake_fetch
 
 
-def _patch_session(instance: UpworkScraper, cookies: dict | None = None) -> None:
-    """Patch ``_get_session`` to return canned cookies/ua without opening Chrome."""
+def _patch_session(
+    instance: UpworkScraper,
+    cookies: dict | None = None,
+    ssr_jobs: list | None = None,
+) -> None:
+    """Patch ``_get_session`` to return (cookies, ua, ssr_jobs) without Chrome."""
     cookies = cookies or {"UniversalSearchNuxt_vt": "fake-token"}
-    instance._get_session = AsyncMock(return_value=(cookies, "FakeAgent/1.0"))
+    instance._get_session = AsyncMock(
+        return_value=(cookies, "FakeAgent/1.0", ssr_jobs or [])
+    )
 
 
 # ---------------------------------------------------------------------------
-# _to_listing  (static – no patching needed)
+# _from_graphql  (via _to_listing dispatch — no patching needed)
 # ---------------------------------------------------------------------------
 
-class TestToListing:
+class TestFromGraphql:
     def test_fixed_price_job(self):
         raw = make_raw_job("id-1", title="Django Dev", job_type="FIXED", amount=300.0)
         listing = UpworkScraper._to_listing(raw)
@@ -84,6 +87,7 @@ class TestToListing:
     def test_description_truncated_to_500_chars(self):
         long_desc = "x" * 600
         raw = {
+            "_source": "graphql",
             "id": "long",
             "title": "T",
             "description": long_desc,
@@ -94,6 +98,7 @@ class TestToListing:
                 "hourlyBudgetMax": None,
                 "fixedPriceAmount": {"amount": 100},
                 "publishTime": NOW_ISO,
+                "contractorTier": "ExpertLevel",
             }},
         }
         listing = UpworkScraper._to_listing(raw)
@@ -110,37 +115,212 @@ class TestToListing:
         listing = UpworkScraper._to_listing(raw)
         assert listing.url == "N/A"
 
+    def test_experience_level_from_contractor_tier(self):
+        raw = make_raw_job("id-exp", contractor_tier="IntermediateLevel")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.experience_level == "Intermediate"
+
+    def test_graphql_client_fields_are_empty(self):
+        """GraphQL visitor API does not expose client info."""
+        raw = make_raw_job("id-noclient")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_country == ""
+        assert listing.client_payment_verified == ""
+        assert listing.client_total_spent == ""
+        assert listing.client_total_reviews == ""
+        assert listing.client_total_feedback == ""
+
+    def test_graphql_duration_is_na(self):
+        """Duration is not available via visitor GraphQL API."""
+        raw = make_raw_job("id-dur")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.duration == "N/A"
+
+    def test_graphql_skills_are_empty(self):
+        raw = make_raw_job("id-skills")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.skills == ""
+
 
 # ---------------------------------------------------------------------------
-# _collect_raw – pagination & deduplication
+# _from_ssr  (via _to_listing dispatch — no patching needed)
+# ---------------------------------------------------------------------------
+
+class TestFromSsr:
+    def test_fixed_price_job(self):
+        raw = make_ssr_job("ssr-1", title="SSR Django Dev", job_type_code=2, amount=300.0)
+        listing = UpworkScraper._to_listing(raw)
+
+        assert isinstance(listing, JobListing)
+        assert listing.job_id == "ssr-1"
+        assert listing.source == "upwork"
+        assert listing.title == "SSR Django Dev"
+        assert listing.job_type == "FIXED"
+        assert listing.budget == "$300.0"
+        assert listing.url == "https://www.upwork.com/jobs/~02ssr-1"
+        assert listing.publish_time == NOW_ISO
+
+    def test_hourly_job(self):
+        raw = make_ssr_job("ssr-2", job_type_code=1, hourly_min=20.0, hourly_max=40.0)
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.job_type == "HOURLY"
+        assert listing.budget == "$20.0-$40.0/hr"
+
+    def test_uid_used_as_job_id(self):
+        raw = make_ssr_job("my-uid-123")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.job_id == "my-uid-123"
+
+    def test_url_uses_ciphertext(self):
+        raw = make_ssr_job("ssr-3")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.url == "https://www.upwork.com/jobs/~02ssr-3"
+
+    def test_skills_extracted(self):
+        raw = make_ssr_job("s1", skills=["Python", "Django", "DRF"])
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.skills == "Python, Django, DRF"
+
+    def test_skills_capped_at_five(self):
+        raw = make_ssr_job("s2", skills=["a", "b", "c", "d", "e", "f", "g"])
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.skills == "a, b, c, d, e"
+
+    def test_skills_empty_when_no_attrs(self):
+        raw = make_ssr_job("s3", skills=[])
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.skills == ""
+
+    def test_duration_extracted(self):
+        raw = make_ssr_job("d1", duration_label="Less than 1 month")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.duration == "Less than 1 month"
+
+    def test_experience_level_expert(self):
+        raw = make_ssr_job("e1", tier_text="jsn_Expert_207")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.experience_level == "Expert"
+
+    def test_experience_level_intermediate(self):
+        raw = make_ssr_job("e2", tier_text="jsn_Intermediate_001")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.experience_level == "Intermediate"
+
+    def test_experience_level_entry(self):
+        raw = make_ssr_job("e3", tier_text="jsn_EntryLevel_xxx")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.experience_level == "Entry"
+
+    def test_client_country_populated(self):
+        raw = make_ssr_job("c1", client_country="Germany")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_country == "Germany"
+
+    def test_client_country_null_gives_empty_string(self):
+        raw = make_ssr_job("c2", client_country=None)
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_country == ""
+
+    def test_client_payment_verified_yes(self):
+        raw = make_ssr_job("c3", client_payment_verified=True)
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_payment_verified == "Yes"
+
+    def test_client_payment_verified_no(self):
+        raw = make_ssr_job("c4", client_payment_verified=False)
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_payment_verified == "No"
+
+    def test_client_total_spent_formatted(self):
+        raw = make_ssr_job("c5", client_total_spent=5000.0)
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_total_spent == "$5K+"
+
+    def test_client_total_spent_null_gives_empty(self):
+        raw = make_ssr_job("c6", client_total_spent=None)
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_total_spent == ""
+
+    def test_client_feedback_formatted(self):
+        raw = make_ssr_job("c7", client_total_feedback=4.9)
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_total_feedback == "4.90"
+
+    def test_client_feedback_null_gives_empty(self):
+        raw = make_ssr_job("c8", client_total_feedback=None)
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_total_feedback == ""
+
+    def test_client_reviews_populated(self):
+        raw = make_ssr_job("c9", client_total_reviews=25)
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_total_reviews == "25"
+
+    def test_client_reviews_null_gives_empty(self):
+        raw = make_ssr_job("c10", client_total_reviews=None)
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.client_total_reviews == ""
+
+    def test_description_truncated_to_500_chars(self):
+        raw = make_ssr_job("d-long")
+        raw["description"] = "z" * 600
+        listing = UpworkScraper._to_listing(raw)
+        assert len(listing.description) == 500
+
+
+# ---------------------------------------------------------------------------
+# _to_listing dispatch
+# ---------------------------------------------------------------------------
+
+class TestToListingDispatch:
+    def test_dispatches_to_ssr_for_ssr_source(self):
+        raw = make_ssr_job("dispatch-ssr")
+        listing = UpworkScraper._to_listing(raw)
+        # SSR jobs have uid as job_id and full client fields
+        assert listing.job_id == "dispatch-ssr"
+
+    def test_dispatches_to_graphql_for_graphql_source(self):
+        raw = make_raw_job("dispatch-gql")
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.job_id == "dispatch-gql"
+        assert listing.client_country == ""  # graphql has no client info
+
+    def test_defaults_to_graphql_when_source_missing(self):
+        raw = {"id": "no-source", "title": "T", "description": "d", "jobTile": None}
+        listing = UpworkScraper._to_listing(raw)
+        assert listing.job_id == "no-source"
+        assert listing.client_country == ""
+
+
+# ---------------------------------------------------------------------------
+# _collect_raw – pagination & deduplication (GraphQL path only, ssr_jobs=[])
 # ---------------------------------------------------------------------------
 
 class TestCollectRaw:
     def test_returns_requested_count(self):
         s = scraper()
-        _patch_fetch(s, [[make_raw_job(str(i)) for i in range(PAGE_SIZE)]])
-        result = s._collect_raw({}, "ua", "python", "http://x", count=5, days=None)
+        _patch_graphql_page(s, [[make_raw_job(str(i)) for i in range(PAGE_SIZE)]])
+        result = s._collect_raw({}, "ua", [], "python", "http://x", count=5, days=None)
         assert len(result) == 5
 
     def test_stops_when_api_exhausted(self):
         s = scraper()
-        # Only 3 jobs available
-        _patch_fetch(s, [[make_raw_job("a"), make_raw_job("b"), make_raw_job("c")]])
-        result = s._collect_raw({}, "ua", "q", "http://x", count=10, days=None)
+        _patch_graphql_page(s, [[make_raw_job("a"), make_raw_job("b"), make_raw_job("c")]])
+        result = s._collect_raw({}, "ua", [], "q", "http://x", count=10, days=None)
         assert len(result) == 3
 
     def test_paginates_to_collect_count(self):
         s = scraper()
         page1 = [make_raw_job(str(i)) for i in range(PAGE_SIZE)]
         page2 = [make_raw_job(str(i)) for i in range(PAGE_SIZE, PAGE_SIZE + 10)]
-        _patch_fetch(s, [page1, page2])
-        result = s._collect_raw({}, "ua", "q", "http://x", count=PAGE_SIZE + 5, days=None)
+        _patch_graphql_page(s, [page1, page2])
+        result = s._collect_raw({}, "ua", [], "q", "http://x", count=PAGE_SIZE + 5, days=None)
         assert len(result) == PAGE_SIZE + 5
 
     def test_within_page_deduplication(self):
         s = scraper()
-        _patch_fetch(s, [[make_raw_job("A"), make_raw_job("B"), make_raw_job("A")]])
-        result = s._collect_raw({}, "ua", "q", "http://x", count=10, days=None)
+        _patch_graphql_page(s, [[make_raw_job("A"), make_raw_job("B"), make_raw_job("A")]])
+        result = s._collect_raw({}, "ua", [], "q", "http://x", count=10, days=None)
         ids = [r["id"] for r in result]
         assert ids == ["A", "B"]
         assert len(ids) == len(set(ids))
@@ -150,26 +330,84 @@ class TestCollectRaw:
         page1 = [make_raw_job(str(i)) for i in range(PAGE_SIZE)]
         # page2 starts with two IDs from page1, then adds new ones
         page2 = [make_raw_job("0"), make_raw_job("1"), make_raw_job("new-1"), make_raw_job("new-2")]
-        _patch_fetch(s, [page1, page2])
-        result = s._collect_raw({}, "ua", "q", "http://x", count=PAGE_SIZE + 2, days=None)
+        _patch_graphql_page(s, [page1, page2])
+        result = s._collect_raw({}, "ua", [], "q", "http://x", count=PAGE_SIZE + 2, days=None)
         ids = [r["id"] for r in result]
         assert len(ids) == len(set(ids)), "cross-page duplicates found"
         assert "new-1" in ids and "new-2" in ids
 
     def test_returns_empty_when_no_results(self):
         s = scraper()
-        _patch_fetch(s, [[]])
-        assert s._collect_raw({}, "ua", "q", "http://x", count=10, days=None) == []
+        _patch_graphql_page(s, [[]])
+        assert s._collect_raw({}, "ua", [], "q", "http://x", count=10, days=None) == []
 
     def test_empty_api_response_terminates_immediately(self):
         s = scraper()
         call_count = [0]
+
         def counting_fetch(cookies, ua, query, url, offset):
             call_count[0] += 1
             return []
-        s._fetch_page = counting_fetch
-        s._collect_raw({}, "ua", "q", "http://x", count=10, days=None)
+
+        s._fetch_graphql_page = counting_fetch
+        s._collect_raw({}, "ua", [], "q", "http://x", count=10, days=None)
         assert call_count[0] == 1, "Should stop after first empty response"
+
+
+# ---------------------------------------------------------------------------
+# _collect_raw – SSR data handling
+# ---------------------------------------------------------------------------
+
+class TestCollectRawSsr:
+    def test_uses_ssr_jobs_for_first_page(self):
+        s = scraper()
+        ssr = [make_ssr_job("ssr-1"), make_ssr_job("ssr-2")]
+        # No GraphQL needed when SSR covers the count
+        result = s._collect_raw({}, "ua", ssr, "q", "http://x", count=2, days=None)
+        assert len(result) == 2
+        assert all(r["_source"] == "ssr" for r in result)
+
+    def test_ssr_deduplication(self):
+        s = scraper()
+        s._fetch_graphql_page = lambda *a: []  # no network calls in unit tests
+        ssr = [make_ssr_job("dup-id"), make_ssr_job("dup-id")]
+        result = s._collect_raw({}, "ua", ssr, "q", "http://x", count=10, days=None)
+        ids = [r["uid"] for r in result if r["_source"] == "ssr"]
+        assert ids == ["dup-id"]
+
+    def test_ssr_then_graphql_for_more(self):
+        s = scraper()
+        ssr = [make_ssr_job("ssr-only")]
+        graphql_page = [make_raw_job("gql-only")]
+        s._fetch_graphql_page = lambda *a: graphql_page if a[-1] == 0 else []
+        result = s._collect_raw({}, "ua", ssr, "q", "http://x", count=2, days=None)
+        assert len(result) == 2
+        assert result[0]["_source"] == "ssr"
+        assert result[1]["_source"] == "graphql"
+
+    def test_ssr_count_satisfied_no_graphql_called(self):
+        s = scraper()
+        call_count = [0]
+
+        def graphql_fetch(*a):
+            call_count[0] += 1
+            return []
+
+        s._fetch_graphql_page = graphql_fetch
+        ssr = [make_ssr_job(str(i)) for i in range(5)]
+        s._collect_raw({}, "ua", ssr, "q", "http://x", count=3, days=None)
+        assert call_count[0] == 0, "GraphQL should not be called when SSR satisfies count"
+
+    def test_ssr_and_graphql_dedup_no_overlap(self):
+        """SSR job ciphertexts are stripped and matched against GraphQL IDs."""
+        s = scraper()
+        ssr = [make_ssr_job("abc")]  # ciphertext = "~02abc"
+        # GraphQL job with the same base identifier should be deduplicated
+        gql_duplicate = make_raw_job("abc")  # id="abc", ciphertext="abc"
+        s._fetch_graphql_page = lambda *a: [gql_duplicate] if a[-1] == 0 else []
+        result = s._collect_raw({}, "ua", ssr, "q", "http://x", count=5, days=None)
+        ids = [r.get("uid") or r.get("id") for r in result]
+        assert ids.count("abc") == 1, "Same job from SSR and GraphQL should appear once"
 
 
 # ---------------------------------------------------------------------------
@@ -186,9 +424,9 @@ class TestCollectRawDateFilter:
         new_time = (now - timedelta(hours=6)).isoformat()
         old_time = (now - timedelta(days=10)).isoformat()
         s = scraper()
-        _patch_fetch(s, [[make_raw_job("new", publish_time=new_time),
-                          make_raw_job("old", publish_time=old_time)]])
-        result = s._collect_raw({}, "ua", "q", "http://x", count=10, days=3)
+        _patch_graphql_page(s, [[make_raw_job("new", publish_time=new_time),
+                                  make_raw_job("old", publish_time=old_time)]])
+        result = s._collect_raw({}, "ua", [], "q", "http://x", count=10, days=3)
         ids = [r["id"] for r in result]
         assert ids == ["new"]
 
@@ -196,23 +434,23 @@ class TestCollectRawDateFilter:
         now = self._now()
         recent = (now - timedelta(hours=12)).isoformat()
         s = scraper()
-        _patch_fetch(s, [[make_raw_job("recent", publish_time=recent)]])
-        result = s._collect_raw({}, "ua", "q", "http://x", count=10, days=1)
+        _patch_graphql_page(s, [[make_raw_job("recent", publish_time=recent)]])
+        result = s._collect_raw({}, "ua", [], "q", "http://x", count=10, days=1)
         assert len(result) == 1 and result[0]["id"] == "recent"
 
     def test_days_none_does_not_filter(self):
         old_time = "2020-01-01T00:00:00+00:00"
         s = scraper()
-        _patch_fetch(s, [[make_raw_job("ancient", publish_time=old_time)]])
-        result = s._collect_raw({}, "ua", "q", "http://x", count=10, days=None)
+        _patch_graphql_page(s, [[make_raw_job("ancient", publish_time=old_time)]])
+        result = s._collect_raw({}, "ua", [], "q", "http://x", count=10, days=None)
         assert len(result) == 1
 
     def test_stops_paginating_after_cutoff(self):
         now = self._now()
         new_time = (now - timedelta(hours=1)).isoformat()
         old_time = (now - timedelta(days=5)).isoformat()
-
         call_count = [0]
+
         def fetch(cookies, ua, query, url, offset):
             call_count[0] += 1
             if offset == 0:
@@ -223,8 +461,8 @@ class TestCollectRawDateFilter:
             return [make_raw_job("should-not-appear")]
 
         s = scraper()
-        s._fetch_page = fetch
-        result = s._collect_raw({}, "ua", "q", "http://x", count=100, days=2)
+        s._fetch_graphql_page = fetch
+        result = s._collect_raw({}, "ua", [], "q", "http://x", count=100, days=2)
         assert call_count[0] == 1, "Should stop after hitting cutoff"
         assert all(r["id"] != "should-not-appear" for r in result)
 
@@ -232,9 +470,20 @@ class TestCollectRawDateFilter:
         s = scraper()
         raw = make_raw_job("x")
         raw["jobTile"]["job"]["publishTime"] = "not-a-date"
-        _patch_fetch(s, [[raw]])
-        result = s._collect_raw({}, "ua", "q", "http://x", count=10, days=1)
+        _patch_graphql_page(s, [[raw]])
+        result = s._collect_raw({}, "ua", [], "q", "http://x", count=10, days=1)
         assert len(result) == 1  # unparseable → assume valid, include it
+
+    def test_ssr_date_filter_excludes_old_jobs(self):
+        now = self._now()
+        new_time = (now - timedelta(hours=2)).isoformat()
+        old_time = (now - timedelta(days=8)).isoformat()
+        s = scraper()
+        ssr = [make_ssr_job("new-ssr", publish_time=new_time),
+               make_ssr_job("old-ssr", publish_time=old_time)]
+        result = s._collect_raw({}, "ua", ssr, "q", "http://x", count=10, days=3)
+        ids = [r["uid"] for r in result if r["_source"] == "ssr"]
+        assert ids == ["new-ssr"]
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +495,7 @@ class TestScrapeIntegration:
     async def test_scrape_returns_job_listings(self):
         s = scraper()
         _patch_session(s)
-        _patch_fetch(s, [[make_raw_job(str(i)) for i in range(3)]])
+        _patch_graphql_page(s, [[make_raw_job(str(i)) for i in range(3)]])
         listings = await s.scrape(query="python", count=3, days=None)
         assert len(listings) == 3
         assert all(isinstance(l, JobListing) for l in listings)
@@ -255,7 +504,7 @@ class TestScrapeIntegration:
     async def test_scrape_respects_count(self):
         s = scraper()
         _patch_session(s)
-        _patch_fetch(s, [[make_raw_job(str(i)) for i in range(PAGE_SIZE)]])
+        _patch_graphql_page(s, [[make_raw_job(str(i)) for i in range(PAGE_SIZE)]])
         listings = await s.scrape(query="python", count=7, days=None)
         assert len(listings) == 7
 
@@ -266,8 +515,8 @@ class TestScrapeIntegration:
         old_time = (now - timedelta(days=10)).isoformat()
         s = scraper()
         _patch_session(s)
-        _patch_fetch(s, [[make_raw_job("new", publish_time=new_time),
-                          make_raw_job("old", publish_time=old_time)]])
+        _patch_graphql_page(s, [[make_raw_job("new", publish_time=new_time),
+                                  make_raw_job("old", publish_time=old_time)]])
         listings = await s.scrape(query="python", count=10, days=1)
         ids = [l.job_id for l in listings]
         assert "new" in ids and "old" not in ids
@@ -276,7 +525,7 @@ class TestScrapeIntegration:
     async def test_scrape_returns_upwork_source(self):
         s = scraper()
         _patch_session(s)
-        _patch_fetch(s, [[make_raw_job("xyz")]])
+        _patch_graphql_page(s, [[make_raw_job("xyz")]])
         listings = await s.scrape(query="python", count=1, days=None)
         assert all(l.source == "upwork" for l in listings)
 
@@ -284,7 +533,7 @@ class TestScrapeIntegration:
     async def test_scrape_empty_results(self):
         s = scraper()
         _patch_session(s)
-        _patch_fetch(s, [[]])
+        _patch_graphql_page(s, [[]])
         listings = await s.scrape(query="nonexistent-xyz", count=10, days=None)
         assert listings == []
 
@@ -292,20 +541,31 @@ class TestScrapeIntegration:
     async def test_scrape_no_duplicate_job_ids(self):
         s = scraper()
         _patch_session(s)
-        page = [make_raw_job("A"), make_raw_job("B"), make_raw_job("A")]  # dup
-        _patch_fetch(s, [page])
+        page = [make_raw_job("A"), make_raw_job("B"), make_raw_job("A")]
+        _patch_graphql_page(s, [page])
         listings = await s.scrape(query="python", count=10, days=None)
         ids = [l.job_id for l in listings]
         assert len(ids) == len(set(ids))
 
+    @pytest.mark.asyncio
+    async def test_scrape_uses_ssr_jobs_from_session(self):
+        """When _get_session returns ssr_jobs, scrape() uses them for page 0."""
+        s = scraper()
+        ssr = [make_ssr_job("ssr-session-1"), make_ssr_job("ssr-session-2")]
+        _patch_session(s, ssr_jobs=ssr)
+        # No GraphQL needed — SSR gives the 2 requested
+        listings = await s.scrape(query="python", count=2, days=None)
+        assert len(listings) == 2
+        assert all(l.source == "upwork" for l in listings)
+
 
 # ---------------------------------------------------------------------------
-# scrape_many() – multi-query, single browser session
+# scrape_many() – multi-query, one browser session per query
 # ---------------------------------------------------------------------------
 
 class TestScrapeMany:
     def _query_aware_fetch(self, data: dict[str, list[dict]]):
-        """Return a _fetch_page stub keyed by query string."""
+        """Return a _fetch_graphql_page stub keyed by query string."""
         def fetch(cookies, ua, query, url, offset):
             return data.get(query, []) if offset == 0 else []
         return fetch
@@ -314,7 +574,7 @@ class TestScrapeMany:
     async def test_returns_results_for_each_query(self):
         s = scraper()
         _patch_session(s)
-        s._fetch_page = self._query_aware_fetch({
+        s._fetch_graphql_page = self._query_aware_fetch({
             "python": [make_raw_job("py-1"), make_raw_job("py-2")],
             "django": [make_raw_job("dj-1")],
         })
@@ -327,23 +587,26 @@ class TestScrapeMany:
     async def test_all_values_are_job_listings(self):
         s = scraper()
         _patch_session(s)
-        s._fetch_page = lambda cookies, ua, query, url, offset: [make_raw_job("x")] if offset == 0 else []
+        s._fetch_graphql_page = lambda cookies, ua, query, url, offset: (
+            [make_raw_job("x")] if offset == 0 else []
+        )
         results = await s.scrape_many(queries=["python"], count=5, days=None)
         assert all(isinstance(l, JobListing) for l in results["python"])
 
     @pytest.mark.asyncio
-    async def test_opens_browser_exactly_once(self):
+    async def test_opens_browser_once_per_query(self):
+        """scrape_many opens one browser session per query (to capture SSR state)."""
         s = scraper()
         session_calls = [0]
 
         async def counting_session(url):
             session_calls[0] += 1
-            return ({"UniversalSearchNuxt_vt": "token"}, "ua")
+            return ({"UniversalSearchNuxt_vt": "token"}, "ua", [])
 
         s._get_session = counting_session
-        s._fetch_page = lambda *a, **k: []
+        s._fetch_graphql_page = lambda *a, **k: []
         await s.scrape_many(queries=["python", "django", "fastapi"], count=5, days=None)
-        assert session_calls[0] == 1
+        assert session_calls[0] == 3, "Should open one browser session per query"
 
     @pytest.mark.asyncio
     async def test_empty_queries_returns_empty_dict(self):
@@ -356,8 +619,7 @@ class TestScrapeMany:
     async def test_respects_count_per_query(self):
         s = scraper()
         _patch_session(s)
-        # Return 20 jobs for every query
-        s._fetch_page = lambda cookies, ua, query, url, offset: (
+        s._fetch_graphql_page = lambda cookies, ua, query, url, offset: (
             [make_raw_job(f"{query}-{i}") for i in range(20)] if offset == 0 else []
         )
         results = await s.scrape_many(queries=["python", "django"], count=5, days=None)
@@ -372,9 +634,11 @@ class TestScrapeMany:
 
         s = scraper()
         _patch_session(s)
-        s._fetch_page = self._query_aware_fetch({
-            "python": [make_raw_job("py-new", publish_time=new_time), make_raw_job("py-old", publish_time=old_time)],
-            "rust":   [make_raw_job("rs-new", publish_time=new_time), make_raw_job("rs-old", publish_time=old_time)],
+        s._fetch_graphql_page = self._query_aware_fetch({
+            "python": [make_raw_job("py-new", publish_time=new_time),
+                       make_raw_job("py-old", publish_time=old_time)],
+            "rust":   [make_raw_job("rs-new", publish_time=new_time),
+                       make_raw_job("rs-old", publish_time=old_time)],
         })
         results = await s.scrape_many(queries=["python", "rust"], count=10, days=2)
         assert [l.job_id for l in results["python"]] == ["py-new"]
@@ -385,7 +649,7 @@ class TestScrapeMany:
         queries = ["fastapi", "python", "django"]
         s = scraper()
         _patch_session(s)
-        s._fetch_page = lambda *a, **k: []
+        s._fetch_graphql_page = lambda *a, **k: []
         results = await s.scrape_many(queries=queries, count=5, days=None)
         assert list(results.keys()) == queries
 
@@ -393,7 +657,7 @@ class TestScrapeMany:
     async def test_source_field_is_upwork_for_all(self):
         s = scraper()
         _patch_session(s)
-        s._fetch_page = self._query_aware_fetch({
+        s._fetch_graphql_page = self._query_aware_fetch({
             "python": [make_raw_job("py-1")],
             "django": [make_raw_job("dj-1")],
         })
@@ -405,14 +669,41 @@ class TestScrapeMany:
     async def test_single_query_behaves_same_as_scrape(self):
         """scrape_many with one query should return same listings as scrape()."""
         raw = [make_raw_job("solo-1"), make_raw_job("solo-2")]
+
         s1 = scraper()
         _patch_session(s1)
-        _patch_fetch(s1, [raw])
+        _patch_graphql_page(s1, [raw])
         single = await s1.scrape(query="python", count=5, days=None)
 
         s2 = scraper()
         _patch_session(s2)
-        s2._fetch_page = lambda cookies, ua, query, url, offset: raw if offset == 0 else []
+        s2._fetch_graphql_page = lambda cookies, ua, query, url, offset: (
+            raw if offset == 0 else []
+        )
         many = await s2.scrape_many(queries=["python"], count=5, days=None)
 
         assert [l.job_id for l in single] == [l.job_id for l in many["python"]]
+
+    @pytest.mark.asyncio
+    async def test_scrape_many_uses_ssr_per_query(self):
+        """Each query gets its own SSR jobs from its own browser session."""
+        s = scraper()
+        call_count = [0]
+
+        async def session_with_ssr(url):
+            call_count[0] += 1
+            query = url.split("q=")[1].split("&")[0]
+            ssr = [make_ssr_job(f"{query}-ssr-0")]
+            return ({"UniversalSearchNuxt_vt": "token"}, "ua", ssr)
+
+        s._get_session = session_with_ssr
+        s._fetch_graphql_page = lambda *a: []
+        results = await s.scrape_many(queries=["python", "django"], count=1, days=None)
+
+        assert call_count[0] == 2
+        assert len(results["python"]) == 1
+        assert len(results["django"]) == 1
+        assert results["python"][0].job_id == "python-ssr-0"
+        assert results["django"][0].job_id == "django-ssr-0"
+
+

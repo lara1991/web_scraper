@@ -77,6 +77,14 @@ class TestSaveFirstWrite:
             publish_time=NOW_ISO,
             url="https://www.upwork.com/jobs/chk-001",
             description="Check description",
+            experience_level="Expert",
+            duration="1 to 3 months",
+            skills="Python, Django",
+            client_country="Germany",
+            client_payment_verified="Yes",
+            client_total_spent="$10K+",
+            client_total_reviews="5",
+            client_total_feedback="4.90",
             scraped_at=NOW_ISO,
         )
         path = tmp_path / "results.csv"
@@ -90,6 +98,14 @@ class TestSaveFirstWrite:
         assert row["publish_time"] == NOW_ISO
         assert row["url"] == "https://www.upwork.com/jobs/chk-001"
         assert row["description"] == "Check description"
+        assert row["experience_level"] == "Expert"
+        assert row["duration"] == "1 to 3 months"
+        assert row["skills"] == "Python, Django"
+        assert row["client_country"] == "Germany"
+        assert row["client_payment_verified"] == "Yes"
+        assert row["client_total_spent"] == "$10K+"
+        assert row["client_total_reviews"] == "5"
+        assert row["client_total_feedback"] == "4.90"
         assert row["scraped_at"] == NOW_ISO
 
 

@@ -12,15 +12,10 @@ class TestJobListingFields:
     """Verify required fields and their order (drives CSV column layout)."""
 
     EXPECTED_COLUMNS = [
-        "job_id",
-        "source",
-        "title",
-        "job_type",
-        "budget",
-        "publish_time",
-        "url",
-        "description",
-        "scraped_at",
+        "job_id", "source", "title", "job_type", "budget", "publish_time",
+        "url", "description", "experience_level", "duration", "skills",
+        "client_country", "client_payment_verified", "client_total_spent",
+        "client_total_reviews", "client_total_feedback", "scraped_at",
     ]
 
     def test_field_names_and_order(self):
@@ -33,28 +28,26 @@ class TestJobListingFields:
 
     def test_scraped_at_auto_populated(self):
         listing = JobListing(
-            job_id="x",
-            source="upwork",
-            title="T",
-            job_type="FIXED",
-            budget="$100",
-            publish_time=NOW_ISO,
-            url="https://example.com",
-            description="desc",
+            job_id="x", source="upwork", title="T", job_type="FIXED",
+            budget="$100", publish_time=NOW_ISO, url="https://example.com",
+            description="desc", experience_level="Expert",
+            duration="1 to 3 months", skills="Python",
+            client_country="USA", client_payment_verified="Yes",
+            client_total_spent="$1K+", client_total_reviews="5",
+            client_total_feedback="4.80",
         )
         assert listing.scraped_at != ""
-        # Must be a valid ISO datetime
         from datetime import datetime
         parsed = datetime.fromisoformat(listing.scraped_at)
         assert parsed.tzinfo is not None
 
     def test_scraped_at_is_unique_across_instances(self):
-        """Two listings created back-to-back should not share the same scraped_at."""
         import time
-        a = JobListing("a", "upwork", "T", "FIXED", "$1", NOW_ISO, "url", "d")
+        a = JobListing("a", "upwork", "T", "FIXED", "$1", NOW_ISO, "url", "d",
+                       "Expert", "N/A", "", "", "", "", "", "")
         time.sleep(0.001)
-        b = JobListing("b", "upwork", "T", "FIXED", "$1", NOW_ISO, "url", "d")
-        # They *may* be equal at sub-millisecond resolution, but both must be non-empty
+        b = JobListing("b", "upwork", "T", "FIXED", "$1", NOW_ISO, "url", "d",
+                       "Expert", "N/A", "", "", "", "", "", "")
         assert a.scraped_at != "" and b.scraped_at != ""
 
 
@@ -67,15 +60,44 @@ class TestJobListingConversion:
         d = asdict(sample_listing)
         assert d["job_id"] == sample_listing.job_id
         assert d["source"] == sample_listing.source
-        assert d["title"] == sample_listing.title
+        assert d["client_country"] == sample_listing.client_country
+        assert d["client_payment_verified"] == sample_listing.client_payment_verified
 
     def test_equality(self):
         a = make_listing(job_id="same")
         b = make_listing(job_id="same")
-        # scraped_at is overridden to NOW_ISO in make_listing, so full equality holds
         assert a == b
 
     def test_inequality_on_different_job_id(self):
         a = make_listing(job_id="aaa")
         b = make_listing(job_id="bbb")
         assert a != b
+
+
+class TestClientFields:
+    def test_client_fields_default_to_empty_string(self):
+        listing = make_listing(
+            client_country="",
+            client_payment_verified="",
+            client_total_spent="",
+            client_total_reviews="",
+            client_total_feedback="",
+        )
+        assert listing.client_country == ""
+        assert listing.client_payment_verified == ""
+        assert listing.client_total_spent == ""
+
+    def test_client_fields_populated(self):
+        listing = make_listing(
+            client_country="Germany",
+            client_payment_verified="Yes",
+            client_total_spent="$10K+",
+            client_total_reviews="25",
+            client_total_feedback="4.95",
+        )
+        assert listing.client_country == "Germany"
+        assert listing.client_payment_verified == "Yes"
+        assert listing.client_total_spent == "$10K+"
+        assert listing.client_total_reviews == "25"
+        assert listing.client_total_feedback == "4.95"
+
