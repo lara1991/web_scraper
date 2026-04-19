@@ -25,10 +25,13 @@ increase these values if you hit 429 errors.
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
+
+logger = logging.getLogger(__name__)
 
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cffi_requests
@@ -243,14 +246,18 @@ class LinkedInScraper(BaseScraper):
         seen_ids: set[str] = set()
         collected: list[dict] = []
         offset = 0
+        page_num = 0
 
         while len(collected) < count:
+            logger.info("[%s] Fetching search page %d (offset=%d) ...", query, page_num + 1, offset)
             html = self._fetch_search_html(query, offset, days)
             page = self._parse_search_html(html)
 
             if not page:
+                logger.info("[%s] No more results.", query)
                 break
 
+            logger.info("[%s] Page %d: %d card(s) found", query, page_num + 1, len(page))
             reached_cutoff = False
             for job in page:
                 job_id = job["job_id"]
@@ -262,6 +269,7 @@ class LinkedInScraper(BaseScraper):
                     try:
                         pub = date.fromisoformat(job["publish_time"])
                         if pub < cutoff:
+                            logger.info("[%s] Date cutoff reached on page %d.", query, page_num + 1)
                             reached_cutoff = True
                             break
                     except ValueError:
@@ -279,12 +287,15 @@ class LinkedInScraper(BaseScraper):
                 if len(collected) >= count:
                     break
 
+            logger.info("[%s] Page %d done — %d/%d job(s) collected", query, page_num + 1, len(collected), count)
+            page_num += 1
             offset += len(page)
             if len(page) < _PAGE_SIZE or reached_cutoff:
                 break
 
             # Polite delay between search pages
             if len(collected) < count:
+                logger.debug("[%s] Waiting %.1f s before next page ...", query, self._request_delay)
                 time.sleep(self._request_delay)
 
         return collected[:count]

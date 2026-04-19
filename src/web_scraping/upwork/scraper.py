@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -8,6 +9,8 @@ from curl_cffi import requests as cffi_requests
 
 from web_scraping.base_scraper import BaseScraper
 from web_scraping.models import JobListing
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # GraphQL query — used for paginated fetches (pages 2+).
@@ -157,12 +160,14 @@ class UpworkScraper(BaseScraper):
         Returns:
             (cookies_dict, user_agent, ssr_jobs_list)
         """
+        logger.info("Launching Chrome (%s) ...", self._browser_exec)
         browser = await uc.start(
             browser_executable_path=self._browser_exec,
             headless=False,
         )
         page = await browser.get(search_url)
 
+        logger.info("Waiting for Cloudflare challenge to clear ...")
         for _ in range(30):
             await asyncio.sleep(1)
             title = await page.evaluate("document.title")
@@ -172,6 +177,7 @@ class UpworkScraper(BaseScraper):
                 and "Challenge" not in str(title)
                 and str(title) != ""
             ):
+                logger.info("Page ready: %r", title)
                 break
 
         # Extra wait so the Nuxt SSR state is fully populated
@@ -182,6 +188,7 @@ class UpworkScraper(BaseScraper):
         ssr_jobs: list[dict] = await self._extract_ssr_jobs(page)
 
         browser.stop()
+        logger.info("Session established — %d SSR job(s) loaded from page state", len(ssr_jobs))
 
         cookies: dict[str, str] = {}
         for part in raw_cookie.split(";"):
@@ -235,6 +242,7 @@ class UpworkScraper(BaseScraper):
         collected: list[dict] = []
 
         # --- Page 0: SSR state ---
+        logger.info("[%s] Processing %d SSR job(s) from page state ...", query, len(ssr_jobs))
         reached_cutoff = False
         for job in ssr_jobs:
             job["_source"] = "ssr"
@@ -260,11 +268,15 @@ class UpworkScraper(BaseScraper):
             if len(collected) >= count:
                 break
 
+        logger.info("[%s] After SSR: %d/%d job(s) collected", query, len(collected), count)
+
         # --- Pages 1+: GraphQL API ---
         offset = 0
         while not reached_cutoff and len(collected) < count:
+            logger.info("[%s] Fetching GraphQL page at offset %d ...", query, offset)
             page = self._fetch_graphql_page(cookies, user_agent, query, search_url, offset)
             if not page:
+                logger.info("[%s] No more GraphQL results.", query)
                 break
 
             for job in page:
@@ -301,6 +313,7 @@ class UpworkScraper(BaseScraper):
                     break
 
             offset += len(page)
+            logger.info("[%s] GraphQL page: %d result(s) — %d/%d collected", query, len(page), len(collected), count)
             if len(page) < self._page_size:
                 break
 
@@ -354,8 +367,7 @@ class UpworkScraper(BaseScraper):
                 or []
             )
         except (KeyError, TypeError):
-            print("Unexpected GraphQL response structure:")
-            print(json.dumps(data, indent=2))
+            logger.warning("Unexpected GraphQL response structure: %s", json.dumps(data, indent=2))
             return []
 
     # ------------------------------------------------------------------

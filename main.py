@@ -17,12 +17,39 @@ Examples
 
 import argparse
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
+from rich.console import Console
+from rich.logging import RichHandler
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+from rich.table import Table
 
 from storage.csv_storage import CsvStorage
+
+console = Console()
+
+_LOG_FORMAT = "%(message)s"
+logging.basicConfig(
+    level=logging.INFO,
+    format=_LOG_FORMAT,
+    datefmt="[%X]",
+    handlers=[RichHandler(console=console, rich_tracebacks=True, markup=True)],
+)
+# Quiet down noisy third-party libraries
+logging.getLogger("nodriver").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("curl_cffi").setLevel(logging.WARNING)
 
 _CONFIG_PATH = Path(__file__).parent / "src" / "configs" / "scraping_configs.yaml"
 
@@ -130,34 +157,62 @@ async def run() -> None:
         src_cfg = _apply_linkedin_cli_filters(args, src_cfg)
         scraper = LinkedInScraper(src_cfg)
 
-    # ---- run ----------------------------------------------------------
+    # ---- header -------------------------------------------------------
     queries: list[str] = args.query
     date_note = f", last {args.days} day(s)" if args.days else ""
-    print(
-        f"Source   : {source}\n"
-        f"Fetching up to {args.count} job(s) per query{date_note}\n"
-        f"Queries  : {', '.join(queries)}\n"
+    console.rule(f"[bold cyan]Web Scraper — {source.capitalize()}[/bold cyan]")
+    console.print(
+        f"  Queries  : [bold]{', '.join(queries)}[/bold]\n"
+        f"  Count    : up to {args.count} per query{date_note}\n"
+        f"  Output   : {src_cfg['output_file']}\n"
     )
 
-    listings_by_query = await scraper.scrape_many(
-        queries=queries, count=args.count, days=args.days
+    # ---- per-query progress bar ---------------------------------------
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}[/bold blue]"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
     )
 
     output_path = Path(src_cfg["output_file"])
     storage = CsvStorage(output_path)
-
     total_fetched = total_new = 0
-    for query, listings in listings_by_query.items():
-        new_count = storage.save(listings)
-        skipped = len(listings) - new_count
-        total_fetched += len(listings)
-        total_new += new_count
-        print(f"  [{query}]  fetched={len(listings)}  new={new_count}  skipped={skipped}")
 
-    print(f"\nTotal fetched : {total_fetched}")
-    print(f"Total new     : {total_new}")
-    print(f"Total skipped : {total_fetched - total_new}")
-    print(f"Results       : {output_path}")
+    with progress:
+        overall = progress.add_task("Overall", total=len(queries))
+
+        for query in queries:
+            task = progress.add_task(f"[{query}]", total=args.count)
+
+            listings = await scraper.scrape(query=query, count=args.count, days=args.days)
+
+            progress.update(task, completed=len(listings))
+            new_count = storage.save(listings)
+            skipped = len(listings) - new_count
+            total_fetched += len(listings)
+            total_new += new_count
+
+            progress.update(overall, advance=1)
+            console.log(
+                f"[{query}]  fetched=[green]{len(listings)}[/green]  "
+                f"new=[cyan]{new_count}[/cyan]  "
+                f"skipped=[yellow]{skipped}[/yellow]"
+            )
+
+    # ---- summary table ------------------------------------------------
+    table = Table(title="Scraping Summary", show_header=True, header_style="bold magenta")
+    table.add_column("Metric", style="dim")
+    table.add_column("Value", justify="right")
+    table.add_row("Total fetched", str(total_fetched))
+    table.add_row("New (saved)",   str(total_new))
+    table.add_row("Skipped (dup)", str(total_fetched - total_new))
+    table.add_row("Output file",   str(output_path))
+    console.print(table)
 
 
 if __name__ == "__main__":
