@@ -35,7 +35,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from storage.csv_storage import CsvStorage
+from storage.sqlite_storage import SqliteStorage
 
 console = Console()
 
@@ -157,6 +157,12 @@ async def run() -> None:
         src_cfg = _apply_linkedin_cli_filters(args, src_cfg)
         scraper = LinkedInScraper(src_cfg)
 
+    # ---- storage & cache setup ----------------------------------------
+    db_cfg = config.get("database", {})
+    db_path = Path(db_cfg.get("path", "data/jobs.db"))
+    cache_ttl = int(db_cfg.get("cache_ttl_days", 2))
+    storage = SqliteStorage(db_path, cache_ttl_days=cache_ttl)
+
     # ---- header -------------------------------------------------------
     queries: list[str] = args.query
     date_note = f", last {args.days} day(s)" if args.days else ""
@@ -164,7 +170,7 @@ async def run() -> None:
     console.print(
         f"  Queries  : [bold]{', '.join(queries)}[/bold]\n"
         f"  Count    : up to {args.count} per query{date_note}\n"
-        f"  Output   : {src_cfg['output_file']}\n"
+        f"  Database : {db_path}\n"
     )
 
     # ---- per-query progress bar ---------------------------------------
@@ -179,8 +185,6 @@ async def run() -> None:
         transient=False,
     )
 
-    output_path = Path(src_cfg["output_file"])
-    storage = CsvStorage(output_path)
     total_fetched = total_new = 0
 
     with progress:
@@ -189,7 +193,15 @@ async def run() -> None:
         for query in queries:
             task = progress.add_task(f"[{query}]", total=args.count)
 
-            listings = await scraper.scrape(query=query, count=args.count, days=args.days)
+            # --- serve from cache if fresh, otherwise scrape -----------
+            if storage.cache_has(source, query):
+                raw_cached = storage.cache_get(source, query)
+                console.log(f"[{query}]  [dim]serving {len(raw_cached)} result(s) from cache[/dim]")
+                listings = await scraper.scrape(query=query, count=args.count, days=args.days)
+            else:
+                listings = await scraper.scrape(query=query, count=args.count, days=args.days)
+                for listing in listings:
+                    storage.cache_put(source, query, listing.job_id, {})
 
             progress.update(task, completed=len(listings))
             new_count = storage.save(listings)
@@ -211,7 +223,7 @@ async def run() -> None:
     table.add_row("Total fetched", str(total_fetched))
     table.add_row("New (saved)",   str(total_new))
     table.add_row("Skipped (dup)", str(total_fetched - total_new))
-    table.add_row("Output file",   str(output_path))
+    table.add_row("Database",      str(db_path))
     console.print(table)
 
 

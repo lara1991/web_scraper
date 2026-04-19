@@ -1,3 +1,7 @@
+database:
+  path: "data/jobs.db"
+  cache_ttl_days: 2
+
 upwork:
   browser_executable: "/usr/bin/google-chrome-stable"
   graphql_url: "https://www.upwork.com/api/graphql/v1?alias=visitorJobSearch"
