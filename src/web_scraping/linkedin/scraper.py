@@ -25,6 +25,7 @@ increase these values if you hit 429 errors.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -93,7 +94,7 @@ class LinkedInScraper(BaseScraper):
     async def scrape(
         self, query: str, count: int, days: int | None
     ) -> list[LinkedInJobListing]:
-        raw = self._collect_raw(query, count, days)
+        raw = await asyncio.to_thread(self._collect_raw, query, count, days)
         return [self._to_listing(job) for job in raw]
 
     async def scrape_many(

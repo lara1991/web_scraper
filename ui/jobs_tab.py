@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pandas as pd
@@ -98,21 +99,18 @@ def build(source: str) -> None:
             "flat dense color=red"
         )
 
-        def _clear_all_confirm() -> None:
+        async def _clear_all_confirm() -> None:
             with ui.dialog() as dlg, ui.card():
                 ui.label(f"Delete ALL {source} jobs? This cannot be undone.").classes("text-base")
                 with ui.row():
                     ui.button("Clear All", icon="delete_forever", on_click=lambda: dlg.submit("ok")).props("color=red")
                     ui.button("Cancel", on_click=lambda: dlg.submit("cancel")).props("flat")
 
-            async def _run():
-                result = await dlg
-                if result == "ok":
-                    shared.storage.clear_all(source)
-                    ui.notify(f"All {source} jobs cleared.", type="warning")
-                    _refresh()
-
-            asyncio.ensure_future(_run())
+            result = await dlg
+            if result == "ok":
+                shared.storage.clear_all(source)
+                ui.notify(f"All {source} jobs cleared.", type="warning")
+                _refresh()
 
         ui.button("Clear All", icon="delete_sweep", on_click=_clear_all_confirm).props(
             "flat dense color=red"
@@ -176,6 +174,3 @@ def build(source: str) -> None:
         detail_desc.set_text(row.get("description", "No description."))
 
     grid.on("rowClicked", _on_row_click)
-
-
-import asyncio  # noqa: E402 (needed for ensure_future in closure)
