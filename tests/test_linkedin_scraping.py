@@ -230,7 +230,7 @@ class TestParseSearchHtml:
 class TestParseDetailHtml:
     def test_parses_all_criteria(self):
         html = _detail_html(
-            description="Build APIs.",
+            description="We need a Python developer with Django and AWS experience.",
             seniority="Entry level",
             employment_type="Contract",
             job_function="Engineering",
@@ -238,10 +238,13 @@ class TestParseDetailHtml:
             workplace_type="Remote",
         )
         detail = LinkedInScraper._parse_detail_html(html)
-        assert detail["description"] == "Build APIs."
+        assert detail["description"] == "We need a Python developer with Django and AWS experience."
         assert detail["experience_level"] == "Entry level"
         assert detail["employment_type"] == "Contract"
-        assert detail["skills"] == "Engineering"
+        # skills are now extracted from the description via keyword matching
+        assert "Python" in detail["skills"]
+        assert "Django" in detail["skills"]
+        assert "AWS" in detail["skills"]
         assert detail["applicant_count"] == "10 applicants"
         assert detail["workplace_type"] == "Remote"
 

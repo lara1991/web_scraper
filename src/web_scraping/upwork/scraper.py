@@ -9,6 +9,7 @@ from curl_cffi import requests as cffi_requests
 
 from web_scraping.base_scraper import BaseScraper
 from web_scraping.models import JobListing
+from web_scraping.skill_extractor import extract_skills
 
 logger = logging.getLogger(__name__)
 
@@ -466,7 +467,7 @@ class UpworkScraper(BaseScraper):
             description=desc[:500],
             experience_level=exp,
             duration="N/A",      # not available in visitor GraphQL API
-            skills="",            # not available in visitor GraphQL API
+            skills=extract_skills(desc),
             client_country="",
             client_payment_verified="",
             client_total_spent="",

@@ -75,20 +75,16 @@ def index() -> None:
         ui.label("Job Board Scraper").classes("text-xl font-bold flex-1")
 
     with ui.tabs().classes("w-full bg-white shadow") as tabs:
-        tab_scraper   = ui.tab("Scraper",       icon="search")
-        tab_upwork    = ui.tab("Upwork Jobs",   icon="list")
-        tab_linkedin  = ui.tab("LinkedIn Jobs", icon="list")
-        tab_analytics = ui.tab("Analytics",     icon="bar_chart")
+        tab_scraper   = ui.tab("Scraper",   icon="search")
+        tab_jobs      = ui.tab("Jobs",      icon="list")
+        tab_analytics = ui.tab("Analytics", icon="bar_chart")
 
     with ui.tab_panels(tabs, value=tab_scraper).classes("w-full p-4"):
         with ui.tab_panel(tab_scraper):
             scraper_tab.build()
 
-        with ui.tab_panel(tab_upwork):
-            jobs_tab.build("upwork")
-
-        with ui.tab_panel(tab_linkedin):
-            jobs_tab.build("linkedin")
+        with ui.tab_panel(tab_jobs):
+            jobs_tab.build()
 
         with ui.tab_panel(tab_analytics):
             analytics_tab.build()

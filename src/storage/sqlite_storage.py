@@ -145,6 +145,30 @@ class SqliteStorage(BaseStorage):
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def load_all_combined(self, sources: list[str] | None = None) -> list[dict]:
+        """Return rows from all (or given) sources merged into a single list.
+
+        Adds normalised aliases so the combined view can use unified column names:
+          - ``location``      : LinkedIn location or Upwork client_country
+          - ``employment_type``: LinkedIn employment_type or Upwork job_type
+
+        Rows are sorted newest-scraped-first.
+        """
+        target_sources = sources if sources is not None else list(_SOURCE_META.keys())
+        combined: list[dict] = []
+        for src in target_sources:
+            rows = self.load_all(src)
+            for row in rows:
+                # Normalise location: Upwork stores client country, LinkedIn has location
+                if not row.get("location"):
+                    row["location"] = row.get("client_country", "")
+                # Normalise type: Upwork has job_type, LinkedIn has employment_type
+                if not row.get("employment_type"):
+                    row["employment_type"] = row.get("job_type", "")
+            combined.extend(rows)
+        combined.sort(key=lambda r: r.get("scraped_at", ""), reverse=True)
+        return combined
+
     # ------------------------------------------------------------------
     # Delete
     # ------------------------------------------------------------------

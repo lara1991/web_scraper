@@ -136,8 +136,16 @@ class TestFromGraphql:
         listing = UpworkScraper._to_listing(raw)
         assert listing.duration == "N/A"
 
-    def test_graphql_skills_are_empty(self):
+    def test_graphql_skills_extracted_from_description(self):
+        # make_raw_job default title is "Django Dev", so description is
+        # "Description for Django Dev" — "Django" should be extracted.
         raw = make_raw_job("id-skills")
+        listing = UpworkScraper._to_listing(raw)
+        assert "Django" in listing.skills
+
+    def test_graphql_skills_empty_when_no_keywords(self):
+        raw = make_raw_job("id-noskills", title="Copywriter")
+        raw["description"] = "Write compelling copy for our brand."
         listing = UpworkScraper._to_listing(raw)
         assert listing.skills == ""
 

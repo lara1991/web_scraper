@@ -40,6 +40,7 @@ from curl_cffi import requests as cffi_requests
 from web_scraping.base_scraper import BaseScraper
 from web_scraping.models import LinkedInJobListing
 from web_scraping.linkedin.filters import LinkedInFilters, days_to_time_filter
+from web_scraping.skill_extractor import extract_skills
 
 _SEARCH_BASE = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 _DETAIL_BASE = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
@@ -229,7 +230,7 @@ class LinkedInScraper(BaseScraper):
             "description":    description,
             "experience_level": criteria.get("seniority level", ""),
             "employment_type":  criteria.get("employment type", ""),
-            "skills":           criteria.get("job function", ""),
+            "skills":           extract_skills(description),
             "applicant_count":  applicant_count,
             "workplace_type":   workplace_type,
         }
