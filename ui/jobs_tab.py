@@ -239,8 +239,10 @@ def build() -> None:
         detail_url    = ui.link("Open on platform", target="_blank").classes(
             "text-blue-600 text-sm"
         )
-        detail_skills = ui.label("").classes("text-sm text-teal-700 mt-1")
-        detail_desc   = ui.label("").classes("text-sm whitespace-pre-wrap mt-2")
+        with ui.column().classes("w-full gap-0 mt-2"):
+            detail_req_header = ui.label("").classes("text-xs font-semibold text-teal-800 uppercase tracking-wide")
+            detail_req_list   = ui.html("").classes("text-sm text-gray-800")
+        detail_desc = ui.label("").classes("text-sm whitespace-pre-wrap text-gray-600 mt-2")
 
     async def _on_row_click(e) -> None:
         row: dict = e.args.get("data", {})
@@ -256,8 +258,24 @@ def build() -> None:
         url = row.get("url", "")
         detail_url.target = url
         detail_url.text   = url or "—"
+
+        # Requirements list
+        import html as _html
         skills = row.get("skills", "") or ""
-        detail_skills.set_text(f"Skills: {skills}" if skills else "")
+        items = [s.strip() for s in skills.split(",") if s.strip()]
+        if items:
+            detail_req_header.set_text(f"Requirements ({len(items)})")
+            bullets = "".join(
+                f'<li style="margin-bottom:3px">{_html.escape(item)}</li>'
+                for item in items
+            )
+            detail_req_list.set_content(
+                f'<ul style="margin:4px 0 0 1.2em;padding:0;list-style:disc">{bullets}</ul>'
+            )
+        else:
+            detail_req_header.set_text("")
+            detail_req_list.set_content("")
+
         detail_desc.set_text(row.get("description", "") or "No description.")
 
     grid.on("rowClicked", _on_row_click)

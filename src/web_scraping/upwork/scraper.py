@@ -9,7 +9,7 @@ from curl_cffi import requests as cffi_requests
 
 from web_scraping.base_scraper import BaseScraper
 from web_scraping.models import JobListing
-from web_scraping.skill_extractor import extract_skills
+from web_scraping.requirements_extractor import extract_requirements
 
 logger = logging.getLogger(__name__)
 
@@ -399,9 +399,12 @@ class UpworkScraper(BaseScraper):
             amt = (job.get("amount") or {}).get("amount", 0) or 0
             budget = f"${amt}" if amt else "N/A"
 
-        # Skills
-        attrs = job.get("attrs") or []
-        skills = ", ".join(a["prettyName"] for a in attrs[:5] if a.get("prettyName"))
+        # Skills — extract requirements from description; fall back to Upwork attrs
+        desc = (job.get("description") or "").strip()
+        skills = extract_requirements(desc) if desc else ""
+        if not skills:
+            attrs = job.get("attrs") or []
+            skills = ", ".join(a["prettyName"] for a in attrs if a.get("prettyName"))
 
         # Experience level
         exp = _parse_experience_level(job.get("tierText", ""))
@@ -416,8 +419,6 @@ class UpworkScraper(BaseScraper):
         feedback = client.get("totalFeedback")
         reviews = client.get("totalReviews")
 
-        desc = (job.get("description") or "").strip()
-
         return JobListing(
             job_id=uid,
             source=UpworkScraper.SOURCE,
@@ -426,7 +427,7 @@ class UpworkScraper(BaseScraper):
             budget=budget,
             publish_time=job.get("publishedOn") or job.get("createdOn") or "N/A",
             url=f"https://www.upwork.com/jobs/{cipher}" if cipher else "N/A",
-            description=desc[:500],
+            description=desc[:5000],
             experience_level=exp,
             duration=job.get("durationLabel") or "N/A",
             skills=skills,
@@ -464,10 +465,10 @@ class UpworkScraper(BaseScraper):
             budget=budget,
             publish_time=job_info.get("publishTime", "N/A"),
             url=f"https://www.upwork.com/jobs/{cipher}" if cipher else "N/A",
-            description=desc[:500],
+            description=desc[:5000],
             experience_level=exp,
             duration="N/A",      # not available in visitor GraphQL API
-            skills=extract_skills(desc),
+            skills=extract_requirements(desc),
             client_country="",
             client_payment_verified="",
             client_total_spent="",

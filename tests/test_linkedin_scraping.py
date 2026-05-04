@@ -251,10 +251,10 @@ class TestParseDetailHtml:
     def test_empty_html_returns_empty_dict(self):
         assert LinkedInScraper._parse_detail_html("") == {}
 
-    def test_description_truncated_to_500_chars(self):
-        html = _detail_html(description="x" * 600)
+    def test_description_truncated_to_5000_chars(self):
+        html = _detail_html(description="x" * 6000)
         detail = LinkedInScraper._parse_detail_html(html)
-        assert len(detail["description"]) == 500
+        assert len(detail["description"]) == 5000
 
     def test_missing_criteria_return_empty_strings(self):
         html = """<div class="show-more-less-html__markup"><p>Hi</p></div>"""

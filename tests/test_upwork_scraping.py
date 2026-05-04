@@ -84,8 +84,8 @@ class TestFromGraphql:
         listing = UpworkScraper._to_listing(raw)
         assert listing.budget == "N/A"
 
-    def test_description_truncated_to_500_chars(self):
-        long_desc = "x" * 600
+    def test_description_truncated_to_5000_chars(self):
+        long_desc = "x" * 6000
         raw = {
             "_source": "graphql",
             "id": "long",
@@ -102,7 +102,7 @@ class TestFromGraphql:
             }},
         }
         listing = UpworkScraper._to_listing(raw)
-        assert len(listing.description) == 500
+        assert len(listing.description) == 5000
 
     def test_url_uses_ciphertext(self):
         raw = make_raw_job("cipher-xyz")
@@ -185,17 +185,25 @@ class TestFromSsr:
         assert listing.url == "https://www.upwork.com/jobs/~02ssr-3"
 
     def test_skills_extracted(self):
+        """Requirements are extracted from the job description."""
+        # Description is "SSR description for SSR Django Dev" → Django via keyword fallback
         raw = make_ssr_job("s1", skills=["Python", "Django", "DRF"])
         listing = UpworkScraper._to_listing(raw)
-        assert listing.skills == "Python, Django, DRF"
+        # requirements_extractor keyword fallback finds Django in the description
+        assert "Django" in listing.skills
 
-    def test_skills_capped_at_five(self):
-        raw = make_ssr_job("s2", skills=["a", "b", "c", "d", "e", "f", "g"])
+    def test_skills_fall_back_to_attrs_when_desc_empty(self):
+        """When description is empty, attrs are used as fallback."""
+        raw = make_ssr_job("s2", skills=["Python", "Django", "DRF"])
+        raw["description"] = ""
         listing = UpworkScraper._to_listing(raw)
-        assert listing.skills == "a, b, c, d, e"
+        assert "Python" in listing.skills
+        assert "Django" in listing.skills
 
-    def test_skills_empty_when_no_attrs(self):
+    def test_skills_empty_when_no_desc_and_no_attrs(self):
+        """Empty description and no attrs yields empty skills."""
         raw = make_ssr_job("s3", skills=[])
+        raw["description"] = ""
         listing = UpworkScraper._to_listing(raw)
         assert listing.skills == ""
 
@@ -269,11 +277,11 @@ class TestFromSsr:
         listing = UpworkScraper._to_listing(raw)
         assert listing.client_total_reviews == ""
 
-    def test_description_truncated_to_500_chars(self):
+    def test_description_truncated_to_5000_chars(self):
         raw = make_ssr_job("d-long")
-        raw["description"] = "z" * 600
+        raw["description"] = "z" * 6000
         listing = UpworkScraper._to_listing(raw)
-        assert len(listing.description) == 500
+        assert len(listing.description) == 5000
 
 
 # ---------------------------------------------------------------------------

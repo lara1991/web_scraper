@@ -40,7 +40,7 @@ from curl_cffi import requests as cffi_requests
 from web_scraping.base_scraper import BaseScraper
 from web_scraping.models import LinkedInJobListing
 from web_scraping.linkedin.filters import LinkedInFilters, days_to_time_filter
-from web_scraping.skill_extractor import extract_skills
+from web_scraping.requirements_extractor import extract_requirements
 
 _SEARCH_BASE = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 _DETAIL_BASE = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
@@ -198,7 +198,8 @@ class LinkedInScraper(BaseScraper):
 
         # Full description
         desc_el  = soup.select_one(".show-more-less-html__markup")
-        description = desc_el.get_text(separator="\n", strip=True)[:500] if desc_el else ""
+        description_full = desc_el.get_text(separator="\n", strip=True) if desc_el else ""
+        description = description_full[:5000]
 
         # Structured criteria (seniority level, employment type, job function, industries)
         criteria: dict[str, str] = {}
@@ -230,7 +231,7 @@ class LinkedInScraper(BaseScraper):
             "description":    description,
             "experience_level": criteria.get("seniority level", ""),
             "employment_type":  criteria.get("employment type", ""),
-            "skills":           extract_skills(description),
+            "skills":           extract_requirements(description_full),
             "applicant_count":  applicant_count,
             "workplace_type":   workplace_type,
         }
